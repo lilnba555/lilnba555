@@ -1,0 +1,216 @@
+// === SERVER SIDE === //
+// server.js
+
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const cors = require('cors');
+const session = require('express-session');
+const bcrypt = require('bcrypt');
+
+const app = express();
+const PORT = 3000;
+
+app.use(cors());
+app.use(express.static('public'));
+app.use('/uploads', express.static('uploads'));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
+app.use(session({
+  secret: 'lil-nba-secret',
+  resave: false,
+  saveUninitialized: true
+}));
+
+const users = {}; // In-memory store for simplicity
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/');
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+
+const upload = multer({ storage: storage });
+
+function isAuthenticated(req, res, next) {
+  if (req.session.user) return next();
+  res.status(401).send('Unauthorized');
+}
+
+app.get('/api/songs', (req, res) => {
+  fs.readdir('uploads', (err, files) => {
+    if (err) return res.status(500).send('Server Error');
+    res.json(files);
+  });
+});
+
+app.post('/api/upload', isAuthenticated, upload.single('song'), (req, res) => {
+  if (!req.file) return res.status(400).send('No file uploaded');
+  res.status(200).send('Upload successful');
+});
+
+app.post('/api/signup', async (req, res) => {
+  const { username, password } = req.body;
+  if (users[username]) return res.status(400).send('User already exists');
+  const hashed = await bcrypt.hash(password, 10);
+  users[username] = { username, password: hashed };
+  res.send('Signup successful');
+});
+
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  const user = users[username];
+  if (!user) return res.status(400).send('User not found');
+  const match = await bcrypt.compare(password, user.password);
+  if (!match) return res.status(401).send('Invalid password');
+  req.session.user = user;
+  res.send('Login successful');
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy();
+  res.send('Logged out');
+});
+
+app.listen(PORT, () => console.log(`Lil NBA running at http://localhost:${PORT}`));
+
+// === CLIENT SIDE === //
+// public/index.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lil NBA Music</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-3xl mx-auto p-4">
+    <h1 class="text-4xl font-bold text-center mb-6">🎵 Lil NBA Music 🎵</h1>
+
+    <div class="bg-white p-4 rounded shadow mb-6">
+      <form id="loginForm" class="mb-4">
+        <h2 class="text-xl font-semibold mb-2">Login</h2>
+        <input type="text" name="username" placeholder="Username" required class="block w-full mb-2 p-2 border rounded">
+        <input type="password" name="password" placeholder="Password" required class="block w-full mb-2 p-2 border rounded">
+        <button class="bg-green-500 text-white px-4 py-2 rounded">Login</button>
+      </form>
+
+      <form id="signupForm">
+        <h2 class="text-xl font-semibold mb-2">Signup</h2>
+        <input type="text" name="username" placeholder="Username" required class="block w-full mb-2 p-2 border rounded">
+        <input type="password" name="password" placeholder="Password" required class="block w-full mb-2 p-2 border rounded">
+        <button class="bg-blue-500 text-white px-4 py-2 rounded">Signup</button>
+      </form>
+
+      <button id="logoutBtn" class="hidden mt-4 bg-red-500 text-white px-4 py-2 rounded">Logout</button>
+    </div>
+
+    <form id="uploadForm" class="bg-white p-4 rounded shadow mb-6 hidden">
+      <label class="block mb-2 font-semibold">Upload a Song</label>
+      <input type="file" name="song" accept="audio/*" required class="mb-4">
+      <button class="bg-blue-500 text-white px-4 py-2 rounded" type="submit">Upload</button>
+    </form>
+
+    <h2 class="text-2xl font-semibold mb-4">Available Songs</h2>
+    <ul id="songList" class="space-y-2"></ul>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const signupForm = document.getElementById('signupForm');
+    const logoutBtn = document.getElementById('logoutBtn');
+    const uploadForm = document.getElementById('uploadForm');
+    const songList = document.getElementById('songList');
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(loginForm);
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: formData.get('username'),
+          password: formData.get('password')
+        })
+      });
+      if (res.ok) {
+        alert('Logged in!');
+        uploadForm.classList.remove('hidden');
+        logoutBtn.classList.remove('hidden');
+        loginForm.classList.add('hidden');
+        signupForm.classList.add('hidden');
+      } else {
+        alert(await res.text());
+      }
+    });
+
+    signupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(signupForm);
+      const res = await fetch('/api/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: formData.get('username'),
+          password: formData.get('password')
+        })
+      });
+      alert(await res.text());
+    });
+
+    logoutBtn.addEventListener('click', async () => {
+      await fetch('/api/logout', { method: 'POST' });
+      uploadForm.classList.add('hidden');
+      logoutBtn.classList.add('hidden');
+      loginForm.classList.remove('hidden');
+      signupForm.classList.remove('hidden');
+    });
+
+    uploadForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const formData = new FormData(uploadForm);
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (res.ok) {
+        alert('Song uploaded!');
+        uploadForm.reset();
+        loadSongs();
+      } else {
+        alert(await res.text());
+      }
+    });
+
+    async function loadSongs() {
+      songList.innerHTML = '';
+      const res = await fetch('/api/songs');
+      const songs = await res.json();
+      songs.forEach(song => {
+        const li = document.createElement('li');
+        li.className = 'bg-white p-3 rounded shadow';
+        li.innerHTML = `
+          <div class="flex flex-col">
+            <span class="font-semibold">${song}</span>
+            <audio controls class="mt-2">
+              <source src="/uploads/${song}" type="audio/mpeg">
+              Your browser does not support the audio element.
+            </audio>
+            <a href="/uploads/${song}" download class="text-blue-600 underline mt-2">Download</a>
+          </div>
+        `;
+        songList.appendChild(li);
+      });
+    }
+
+    loadSongs();
+  </script>
+</body>
+</html>
